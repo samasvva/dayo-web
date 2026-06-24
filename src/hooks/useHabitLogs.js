@@ -24,6 +24,7 @@ export function useHabitLogs(person, year, month) {
 
   const toggleLog = async (habitId, date, currentDone) => {
     const newDone = !currentDone
+
     // Optimistic update
     setLogs(prev => {
       const existing = prev.find(l => l.habit_id === habitId && l.date === date)
@@ -33,15 +34,31 @@ export function useHabitLogs(person, year, month) {
       return [...prev, { habit_id: habitId, person, date, done: newDone, id: `temp-${Date.now()}` }]
     })
 
-    const { error } = await supabase
-      .from('habit_logs')
-      .upsert({ habit_id: habitId, person, date, done: newDone }, { onConflict: 'habit_id,date' })
+    // Find existing row from current state
+    const existingRow = logs.find(l => l.habit_id === habitId && l.date === date)
+    let error
+
+    if (existingRow && !String(existingRow.id).startsWith('temp-')) {
+      // Row exists — update it
+      const result = await supabase
+        .from('habit_logs')
+        .update({ done: newDone })
+        .eq('id', existingRow.id)
+      error = result.error
+    } else {
+      // No row yet — insert
+      const result = await supabase
+        .from('habit_logs')
+        .insert({ habit_id: habitId, person, date, done: newDone })
+      error = result.error
+    }
 
     if (error) {
-      // Revert on error
+      console.error('habit_logs write failed:', error)
+      // Revert optimistic update
       setLogs(prev => {
         const existing = prev.find(l => l.habit_id === habitId && l.date === date)
-        if (existing && existing.id?.startsWith('temp-')) {
+        if (existing && String(existing.id).startsWith('temp-')) {
           return prev.filter(l => !(l.habit_id === habitId && l.date === date))
         }
         return prev.map(l => l.habit_id === habitId && l.date === date ? { ...l, done: currentDone } : l)
