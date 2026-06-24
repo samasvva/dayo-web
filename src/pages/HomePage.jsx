@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import DonutChart from '../components/DonutChart'
@@ -58,34 +58,58 @@ export default function HomePage() {
     const todayDone = (todayTasks || []).filter(t => t.done).length
     const todayTotal = (todayTasks || []).length
 
-    // Calculate streak
+    // Streak: fetch all logs for this month in one query
     let streak = 0
-    for (let d = dayOfMonth; d >= 1; d--) {
-      const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`
-      if (habitIds.length === 0) break
-      const { data: dayLogs } = await supabase
+    if (habitIds.length > 0) {
+      const { data: allLogs } = await supabase
         .from('habit_logs')
-        .select('done')
+        .select('date, done')
         .in('habit_id', habitIds)
-        .eq('date', dateStr)
+        .gte('date', startDate)
+        .lte('date', endDate)
         .eq('done', true)
-      const dayPct = habitIds.length > 0 ? ((dayLogs || []).length / habitIds.length) * 100 : 0
-      if (dayPct > 50) streak++
-      else break
+
+      const doneCounts = {}
+      for (const l of allLogs || []) {
+        doneCounts[l.date] = (doneCounts[l.date] || 0) + 1
+      }
+
+      for (let d = dayOfMonth; d >= 1; d--) {
+        const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+        const pct = ((doneCounts[dateStr] || 0) / habitIds.length) * 100
+        if (pct > 50) streak++
+        else break
+      }
     }
 
     return { habitPct, todayDone, todayTotal, streak }
   }
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true)
     const [a, b] = await Promise.all([fetchPersonData('A'), fetchPersonData('B')])
     setDataA(a)
     setDataB(b)
     setLoading(false)
-  }
+  }, [year, month, today])
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => { loadData() }, [loadData])
+
+  // Real-time sync — refresh when habit_logs or tasks change on any device
+  useEffect(() => {
+    const habitChannel = supabase
+      .channel('home_habit_logs')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'habit_logs' }, () => { loadData() })
+      .subscribe()
+    const taskChannel = supabase
+      .channel('home_tasks')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, () => { loadData() })
+      .subscribe()
+    return () => {
+      supabase.removeChannel(habitChannel)
+      supabase.removeChannel(taskChannel)
+    }
+  }, [loadData])
 
   const handleAddHabit = async () => {
     if (!habitName.trim()) return

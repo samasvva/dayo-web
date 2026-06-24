@@ -22,6 +22,20 @@ export function useHabitLogs(person, year, month) {
 
   useEffect(() => { fetch() }, [fetch])
 
+  // Real-time sync — picks up changes from other devices
+  useEffect(() => {
+    const channel = supabase
+      .channel(`habit_logs_${person}_${year}_${month}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'habit_logs',
+        filter: `person=eq.${person}`,
+      }, () => { fetch() })
+      .subscribe()
+    return () => supabase.removeChannel(channel)
+  }, [person, year, month, fetch])
+
   const toggleLog = async (habitId, date, currentDone) => {
     const newDone = !currentDone
 
@@ -34,19 +48,16 @@ export function useHabitLogs(person, year, month) {
       return [...prev, { habit_id: habitId, person, date, done: newDone, id: `temp-${Date.now()}` }]
     })
 
-    // Find existing row from current state
     const existingRow = logs.find(l => l.habit_id === habitId && l.date === date)
     let error
 
     if (existingRow && !String(existingRow.id).startsWith('temp-')) {
-      // Row exists — update it
       const result = await supabase
         .from('habit_logs')
         .update({ done: newDone })
         .eq('id', existingRow.id)
       error = result.error
     } else {
-      // No row yet — insert
       const result = await supabase
         .from('habit_logs')
         .insert({ habit_id: habitId, person, date, done: newDone })
@@ -55,7 +66,6 @@ export function useHabitLogs(person, year, month) {
 
     if (error) {
       console.error('habit_logs write failed:', error)
-      // Revert optimistic update
       setLogs(prev => {
         const existing = prev.find(l => l.habit_id === habitId && l.date === date)
         if (existing && String(existing.id).startsWith('temp-')) {

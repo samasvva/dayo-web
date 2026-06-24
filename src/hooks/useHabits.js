@@ -18,6 +18,20 @@ export function useHabits(person) {
 
   useEffect(() => { fetch() }, [fetch])
 
+  // Real-time sync — picks up changes from other devices
+  useEffect(() => {
+    const channel = supabase
+      .channel(`habits_${person}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'habits',
+        filter: `person=eq.${person}`,
+      }, () => { fetch() })
+      .subscribe()
+    return () => supabase.removeChannel(channel)
+  }, [person, fetch])
+
   const addHabit = async (name, category) => {
     const { data, error } = await supabase
       .from('habits')

@@ -20,6 +20,20 @@ export function useTasks(person, startDate, endDate) {
 
   useEffect(() => { fetch() }, [fetch])
 
+  // Real-time sync — picks up changes from other devices
+  useEffect(() => {
+    const channel = supabase
+      .channel(`tasks_${person}_${startDate}_${endDate}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'tasks',
+        filter: `person=eq.${person}`,
+      }, () => { fetch() })
+      .subscribe()
+    return () => supabase.removeChannel(channel)
+  }, [person, startDate, endDate, fetch])
+
   const addTask = async (title, date) => {
     const optimisticId = `temp-${Date.now()}`
     const optimistic = { id: optimisticId, person, title, date, done: false, created_at: new Date().toISOString() }
@@ -49,7 +63,8 @@ export function useTasks(person, startDate, endDate) {
 
   const deleteTask = async (id) => {
     setTasks(prev => prev.filter(t => t.id !== id))
-    await supabase.from('tasks').delete().eq('id', id)
+    const { error } = await supabase.from('tasks').delete().eq('id', id)
+    if (error) fetch()
   }
 
   return { tasks, loading, addTask, toggleTask, deleteTask, refetch: fetch }
